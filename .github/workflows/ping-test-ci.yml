@@ -1,0 +1,105 @@
+name: POJA Ping Test
+
+on:
+  push:
+    branches:
+      - import-09d37d5a-89d3-4f85-9e3e-04123acf69a2-ping-test
+
+env:
+  ORG_ID: 67963e32-e54f-4785-93e8-4b4c8d56eced
+  IMPORT_ID: 09d37d5a-89d3-4f85-9e3e-04123acf69a2
+
+jobs:
+  ping-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SENTRY_DSN: ${{ secrets.TEST_SENTRY_DSN }}
+      SPRING_SESSION_JDBC_INITIALIZESCHEMA: ${{ secrets.TEST_SPRING_SESSION_JDBC_INITIALIZESCHEMA }}
+      AWS_SES_SOURCE: ${{ secrets.TEST_AWS_SES_SOURCE }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2_CLIENT_WEB_OAUTH2LOGINAUTHENTICATIONFILTER: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2_CLIENT_WEB_OAUTH2LOGINAUTHENTICATIONFILTER }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB }}
+      ASA_LOGOUT_URL: ${{ secrets.TEST_ASA_LOGOUT_URL }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_2_: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_2_ }}
+      LOW_REMAINING_DAYS_THRESHOLD: ${{ secrets.TEST_LOW_REMAINING_DAYS_THRESHOLD }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_1_: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_1_ }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_WEB_SESSION: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_WEB_SESSION }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_CLIENTID: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_CLIENTID }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_CLIENT: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_WEB_CLIENT }}
+      ASA_PAID_CARE_MISSION_CODES: ${{ secrets.TEST_ASA_PAID_CARE_MISSION_CODES }}
+      MAX_LATENESS_REPORT: ${{ secrets.TEST_MAX_LATENESS_REPORT }}
+      LOGGING_LEVEL_ROOT: ${{ secrets.TEST_LOGGING_LEVEL_ROOT }}
+      SPRING_DATASOURCE_PASSWORD: ${{ secrets.TEST_SPRING_DATASOURCE_PASSWORD }}
+      ACCOUNTANTS: ${{ secrets.TEST_ACCOUNTANTS }}
+      SPRING_DATASOURCE_URL: ${{ secrets.TEST_SPRING_DATASOURCE_URL }}
+      SERVER_ERROR_INCLUDEMESSAGE: ${{ secrets.TEST_SERVER_ERROR_INCLUDEMESSAGE }}
+      CASDOOR_LOGOUT_URL: ${{ secrets.TEST_CASDOOR_LOGOUT_URL }}
+      SENSITIVE_WORKERS_CODES: ${{ secrets.TEST_SENSITIVE_WORKERS_CODES }}
+      SPRING_DATASOURCE_USERNAME: ${{ secrets.TEST_SPRING_DATASOURCE_USERNAME }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2_CLIENT: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2_CLIENT }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_0_: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_SCOPE_0_ }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_REDIRECTURI: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_REDIRECTURI }}
+      SPRING_SESSION_STORETYPE: ${{ secrets.TEST_SPRING_SESSION_STORETYPE }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_WEB: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_WEB }}
+      LOGGING_LEVEL_ORG_APACHE_HTTP: ${{ secrets.TEST_LOGGING_LEVEL_ORG_APACHE_HTTP }}
+      SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_CLIENTSECRET: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_REGISTRATION_CASDOOR_CLIENTSECRET }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY_OAUTH2 }}
+      ASA_CARE_PRODUCT_CODE: ${{ secrets.TEST_ASA_CARE_PRODUCT_CODE }}
+      LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SESSION: ${{ secrets.TEST_LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SESSION }}
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_CASDOOR_ISSUERURI: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_CASDOOR_ISSUERURI }}
+      SPRING_FLYWAY_OUTOFORDER: ${{ secrets.TEST_SPRING_FLYWAY_OUTOFORDER }}
+      SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_CASDOOR_USERNAMEATTRIBUTE: ${{ secrets.TEST_SPRING_SECURITY_OAUTH2_CLIENT_PROVIDER_CASDOOR_USERNAMEATTRIBUTE }}
+
+    steps:
+      - uses: actions/checkout@v4.1.6
+
+      - uses: actions/setup-java@v4.2.1
+        with:
+          java-version: '21'
+          distribution: 'corretto'
+
+      - name: Run ping test
+        run: |
+          chmod +x gradlew
+          ./gradlew test --tests PingIT -x jacocoTestCoverageVerification
+
+      - name: Zip test report
+        if: always()
+        run: cd build/reports/tests/test && zip -r $GITHUB_WORKSPACE/PING_TEST_REPORT.zip .
+
+      - name: Upload test report
+        if: always()
+        run: |
+          curl --fail -X POST "https://2egip6ihacjr6auyxa3gtmn4tu0pgaaj.lambda-url.eu-west-3.on.aws/orgs/${{ env.ORG_ID }}/imports/${{ env.IMPORT_ID }}/test-reports/PING_TEST_REPORT" \
+            -H "Authorization: AppImportBearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @PING_TEST_REPORT.zip
+
+  update-import-state:
+    runs-on: ubuntu-latest
+    needs: ping-test
+    if: always()
+
+    steps:
+      - name: Update import state
+        run: |
+          REPO_NAME=$(basename "${GITHUB_REPOSITORY}")
+
+          if [ "${{ needs.ping-test.result }}" == "success" ]; then
+            JOB_STATUS="SUCCESS"
+          else
+            JOB_STATUS="FAILURE"
+          fi
+
+          curl --fail -X POST "https://2egip6ihacjr6auyxa3gtmn4tu0pgaaj.lambda-url.eu-west-3.on.aws/orgs/${{ env.ORG_ID }}/imports/${{ env.IMPORT_ID }}/states" \
+            -H "Authorization: AppImportBearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+                  --arg job_name "POST_TRANSFORMATION_PING_TEST" \
+                  --arg job_status "$JOB_STATUS" \
+                  --arg run_id "${{ github.run_id }}" \
+                  --arg attempt_nb "${{ github.run_attempt }}" \
+                  --arg repo_owner "${{ github.repository_owner }}" \
+                  --arg repo_name "$REPO_NAME" \
+                  '{ job_name: $job_name, job_status: $job_status, run_id: $run_id, attempt_nb: $attempt_nb, repo_owner: $repo_owner, repo_name: $repo_name }')"
