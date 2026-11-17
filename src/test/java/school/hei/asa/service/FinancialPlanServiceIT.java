@@ -94,6 +94,11 @@ class FinancialPlanServiceIT extends FacadeIT {
         .thenAnswer(
             invocation -> {
               InvoiceForm passedForm = invocation.getArgument(0);
+              List<Contract> passedContracts = invocation.getArgument(1);
+              var total =
+                  passedContracts.isEmpty()
+                      ? BigDecimal.valueOf(2000)
+                      : BigDecimal.valueOf(FTE_MONTHLY_PAY);
               return new InvoiceForm(
                   passedForm.id(),
                   passedForm.yearMonth(),
@@ -101,14 +106,14 @@ class FinancialPlanServiceIT extends FacadeIT {
                   LocalDate.now().plusDays(3),
                   "job",
                   0.0d,
-                  BigDecimal.valueOf(2000),
-                  BigDecimal.valueOf(2000),
+                  BigDecimal.valueOf(1000),
+                  BigDecimal.valueOf(1000), // first line only: must not be what is summed
                   false,
                   null,
                   null,
                   null,
                   null,
-                  BigDecimal.valueOf(2000),
+                  total,
                   "Zéro",
                   "Banque: Multi");
             });
@@ -116,8 +121,8 @@ class FinancialPlanServiceIT extends FacadeIT {
     var financialPlan = subject.financialPlan(testYear);
 
     assertNotNull(financialPlan);
-    assertEquals("550000.0", financialPlan.plannedCost().get(Month.FEBRUARY).ppMontant().trim());
-    assertEquals("0.0", financialPlan.plannedCost().get(Month.JANUARY).ppMontant().trim());
+    assertEquals("550000.0", financialPlan.plannedCost().get(Month.JANUARY).ppMontant().trim());
+    assertEquals("0.0", financialPlan.plannedCost().get(Month.FEBRUARY).ppMontant().trim());
     assertEquals("302000.0", financialPlan.executedCost().get(Month.JANUARY).ppMontant().trim());
     assertEquals("302000.0", financialPlan.executedCost().get(Month.DECEMBER).ppMontant().trim());
     assertEquals(12, financialPlan.executedCost().size());
@@ -126,7 +131,78 @@ class FinancialPlanServiceIT extends FacadeIT {
     verify(contractRepository).findByYear(testYear);
     verify(workerRepository).findAll();
     verify(missionExecutionRepository).missionExecutionsByDateBetweenAllWorkers(yearStart, yearEnd);
-    verify(invoiceService, org.mockito.Mockito.times(12))
+    verify(invoiceService, org.mockito.Mockito.times(24))
         .extractInvoiceData(any(), any(), any(), any());
+  }
+
+  @Test
+  void executed_cost_only_passes_contracts_covering_the_month() {
+    int testYear = 2026;
+    var yearStart = LocalDate.of(testYear, 1, 1);
+    var yearEnd = LocalDate.of(testYear, 12, 31);
+    var endedWorker =
+        new Worker("W-201", "Ended", "e@x", "Ended", "a", "c", "nif", "stat", null, null);
+    var lateWorker =
+        new Worker("W-202", "Late", "l@x", "Late", "a", "c", "nif", "stat", null, null);
+    var fteLevel = new ContractLevel("level", fullTimeEmployee, FTE_MONTHLY_PAY, null, null);
+    var endedContract =
+        new Contract(
+            endedWorker,
+            "jobTitle",
+            fteLevel,
+            LocalDate.of(2021, 11, 1).atStartOfDay(ZoneId.systemDefault()).toInstant(),
+            LocalDate.of(2025, 12, 31).atStartOfDay(ZoneId.systemDefault()).toInstant(),
+            null,
+            "company",
+            "contractBucketKey");
+    var lateContract =
+        new Contract(
+            lateWorker,
+            "jobTitle",
+            fteLevel,
+            LocalDate.of(2026, 6, 15).atStartOfDay(ZoneId.systemDefault()).toInstant(),
+            null,
+            null,
+            "company",
+            "contractBucketKey");
+
+    when(contractRepository.findByYear(testYear)).thenReturn(List.of());
+    when(workerRepository.findAll()).thenReturn(List.of(endedWorker, lateWorker));
+    when(contractRepository.findAll()).thenReturn(List.of(endedContract, lateContract));
+    when(bankAccountRepository.findAll()).thenReturn(List.of());
+    when(missionExecutionRepository.missionExecutionsByDateBetweenAllWorkers(yearStart, yearEnd))
+        .thenReturn(List.of());
+    when(invoiceService.extractInvoiceData(any(), any(), any(), any()))
+        .thenAnswer(
+            invocation -> {
+              List<Contract> passedContracts = invocation.getArgument(1);
+              assertTrue(passedContracts.stream().noneMatch(c -> c.equals(endedContract)));
+              InvoiceForm passedForm = invocation.getArgument(0);
+              var total = passedContracts.isEmpty() ? null : BigDecimal.valueOf(FTE_MONTHLY_PAY);
+              return new InvoiceForm(
+                  passedForm.id(),
+                  passedForm.yearMonth(),
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  null,
+                  false,
+                  null,
+                  null,
+                  null,
+                  null,
+                  total,
+                  null,
+                  null);
+            });
+
+    var executedCost = subject.financialPlan(testYear).executedCost();
+
+    assertEquals("0.0", executedCost.get(Month.JANUARY).ppMontant().trim());
+    assertEquals("0.0", executedCost.get(Month.MAY).ppMontant().trim());
+    assertEquals("300000.0", executedCost.get(Month.JUNE).ppMontant().trim());
+    assertEquals("300000.0", executedCost.get(Month.DECEMBER).ppMontant().trim());
   }
 }
