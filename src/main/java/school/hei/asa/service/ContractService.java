@@ -3,13 +3,9 @@ package school.hei.asa.service;
 import static java.time.ZoneId.systemDefault;
 import static java.util.Locale.FRENCH;
 import static java.util.Locale.US;
-import static school.hei.asa.model.DailyExecution.Type.fullCare;
-import static school.hei.asa.model.DailyExecution.Type.fullWork;
 import static school.hei.asa.model.contract.ContractType.fullTimeEmployee;
 
 import java.time.LocalDate;
-import java.time.YearMonth;
-import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
@@ -19,8 +15,8 @@ import java.util.stream.Collectors;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import school.hei.asa.CareProductCodeSupplier;
 import school.hei.asa.model.DailyExecution;
+import school.hei.asa.model.MissionExecution;
 import school.hei.asa.model.Worker;
 import school.hei.asa.model.contract.Contract;
 import school.hei.asa.repository.ContractRepository;
@@ -31,12 +27,13 @@ import school.hei.asa.repository.WorkerRepository;
 @Service
 @AllArgsConstructor
 public class ContractService {
+  // Arbitrary far-future bound for open-ended contracts (not LocalDate.MAX: overflows SQL BETWEEN)
+  public static final LocalDate OPEN_ENDED_CONTRACT_UPPER_BOUND = LocalDate.of(9999, 12, 31);
   private static final double CLOSE_REMAINING_DAYS_TOLERANCE = 0.01;
   private final WorkerRepository workerRepository;
   private final ContractRepository contractRepository;
   private final DailyExecutionRepository dailyExecutionRepository;
   private final MissionService missionService;
-  private CareProductCodeSupplier careProductCodeSupplier;
   private final DateTimeFormatter localDateFormatter =
       DateTimeFormatter.ofPattern("dd MMM yyyy", FRENCH);
 
@@ -74,7 +71,7 @@ public class ContractService {
     var startDate = contract.entranceInstant().atZone(systemDefault()).toLocalDate();
     var endDate =
         contract.endInstant() == null
-            ? LocalDate.now()
+            ? OPEN_ENDED_CONTRACT_UPPER_BOUND
             : contract.endInstant().atZone(systemDefault()).toLocalDate();
     var actualWorkedDays = getActualWorkedDaysByDateByWorker(startDate, worker.code(), endDate);
     var workedDays = actualWorkedDays.equals("-") ? 0d : Double.parseDouble(actualWorkedDays);
@@ -99,38 +96,17 @@ public class ContractService {
     if (executions.isEmpty()) {
       return "-";
     }
+    // Same rule as invoicing: everything but unpaid care is paid, hence consumes contract days
     var result =
         executions.stream()
-            .map(
-                dailyExecution -> {
-                  var type = dailyExecution.type(careProductCodeSupplier.get());
-                  if (type.equals(fullWork)) {
-                    return 1.0d;
-                  } else if (type.equals(fullCare)) {
-                    return 0.0d;
-                  }
-                  return dailyExecution.executions().stream()
-                      .map(
-                          me -> {
-                            return missionService.isUnpaidCare(me) ? 0.0d : me.dayPercentage();
-                          })
-                      .reduce(Double::sum)
-                      .get();
-                })
-            .reduce(Double::sum)
-            .get();
+            .flatMap(dailyExecution -> dailyExecution.executions().stream().distinct())
+            .filter(me -> !missionService.isUnpaidCare(me))
+            .mapToDouble(MissionExecution::dayPercentage)
+            .sum();
     return String.format(US, "%.1f", result);
   }
 
   public List<Contract> findActiveContracts() {
     return contractRepository.findAllActiveContracts();
-  }
-
-  public boolean isActiveContract(Contract contract, YearMonth yearMonth) {
-    if (contract.endInstant() == null) {
-      return true;
-    }
-    var endYearMonth = YearMonth.from(contract.endInstant().atZone(ZoneId.systemDefault()));
-    return !yearMonth.isAfter(endYearMonth);
   }
 }

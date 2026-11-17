@@ -1,7 +1,6 @@
 package school.hei.asa.service;
 
 import static java.time.LocalDate.now;
-import static java.time.ZoneOffset.UTC;
 import static java.util.Comparator.comparing;
 import static java.util.Comparator.naturalOrder;
 import static school.hei.asa.model.contract.ContractType.fullTimeEmployee;
@@ -90,7 +89,12 @@ public class InvoiceService {
     return extractInvoiceData(invoiceForm, workerContracts, workerMissionExecutions, bankAccount);
   }
 
-  private InvoiceForm generateInvoiceFormFrom(Double totalDaysWorked, Contract contract) {
+  /**
+   * @param from first day of the invoiced period, within a single month
+   * @param to last day of the invoiced period, within the same month
+   */
+  private InvoiceForm generateInvoiceFormFrom(
+      Double totalDaysWorked, Contract contract, LocalDate from, LocalDate to) {
     if (contract == null) {
       return new InvoiceForm(
           null,
@@ -115,7 +119,23 @@ public class InvoiceService {
 
     if (contractLevel.type() == fullTimeEmployee) {
       var monthlyPay = toBigDecimalOrZero(contractLevel.monthlyPay());
-      var parsedMonthlyPay = numberConverter.convertToWords(numberParser.parseToNumber(monthlyPay));
+      // prorated over the calendar days of the month the contract covers
+      var monthDays = YearMonth.from(from).lengthOfMonth();
+      var coveredDays = contract.daysCovered(from, to);
+      var isFullMonth = coveredDays == monthDays;
+      var amount =
+          isFullMonth
+              ? monthlyPay
+              : monthlyPay
+                  .multiply(BigDecimal.valueOf(coveredDays))
+                  .divide(BigDecimal.valueOf(monthDays), 2, RoundingMode.HALF_UP);
+      var quantity =
+          isFullMonth
+              ? 1d
+              : BigDecimal.valueOf(coveredDays)
+                  .divide(BigDecimal.valueOf(monthDays), 2, RoundingMode.HALF_UP)
+                  .doubleValue();
+      var parsedAmount = numberConverter.convertToWords(numberParser.parseToNumber(amount));
 
       return new InvoiceForm(
           null,
@@ -123,16 +143,16 @@ public class InvoiceService {
           null,
           null,
           description,
-          1d,
+          quantity,
           monthlyPay,
-          monthlyPay,
+          amount,
           null,
           null,
           null,
           null,
           null,
-          monthlyPay,
-          parsedMonthlyPay,
+          amount,
+          parsedAmount,
           null);
     }
 
@@ -226,36 +246,45 @@ public class InvoiceService {
       BankAccount bankAccountForWorker) {
 
     var isEmpty = invoiceForm.yearMonth() == null;
-    var hasContract = !workerContracts.isEmpty();
     var referenceDate = now();
     var issueDate = referenceDate.plusDays(3);
     var yearMonth = isEmpty ? YearMonth.from(referenceDate) : invoiceForm.yearMonth();
+    workerContracts = workerContracts.stream().filter(c -> c.overlaps(yearMonth)).toList();
+    var hasContract = !workerContracts.isEmpty();
     var firstCurrentMonthDay = yearMonth.atDay(1);
     var lastCurrentMonthDay = yearMonth.atEndOfMonth();
     var hasUpgradedLevel =
         hasContract
             && workerContracts.size() > 1
-            && LocalDate.ofInstant(workerContracts.getFirst().entranceInstant(), UTC)
-                .isBefore(lastCurrentMonthDay)
-            && LocalDate.ofInstant(workerContracts.getFirst().entranceInstant(), UTC)
-                .isAfter(firstCurrentMonthDay);
+            && workerContracts.getFirst().entranceDate().isAfter(firstCurrentMonthDay);
     var bankAccount = bankAccountForWorker != null ? bankAccountForWorker.toString() : "";
 
     if (hasUpgradedLevel) {
-      var firstContract = workerContracts.getFirst();
-      var secondContract = workerContracts.get(1);
+      var newContract = workerContracts.getFirst();
+      var firstContract = workerContracts.get(1);
+      var secondContract = newContract;
       var firstTotalDaysWorked =
           sumDayPercentage(
               workerMissionExecutions,
               firstCurrentMonthDay,
-              LocalDate.ofInstant(firstContract.entranceInstant(), UTC));
+              firstContract.capToEnd(newContract.entranceDate().minusDays(1)));
       var secondTotalDaysWorked =
           sumDayPercentage(
               workerMissionExecutions,
-              LocalDate.ofInstant(firstContract.entranceInstant(), UTC),
+              newContract.entranceDate(),
+              newContract.capToEnd(lastCurrentMonthDay));
+      var firstInvoiceForm =
+          generateInvoiceFormFrom(
+              firstTotalDaysWorked,
+              firstContract,
+              firstCurrentMonthDay,
+              newContract.entranceDate().minusDays(1));
+      var secondInvoiceForm =
+          generateInvoiceFormFrom(
+              secondTotalDaysWorked,
+              secondContract,
+              newContract.entranceDate(),
               lastCurrentMonthDay);
-      var firstInvoiceForm = generateInvoiceFormFrom(firstTotalDaysWorked, firstContract);
-      var secondInvoiceForm = generateInvoiceFormFrom(secondTotalDaysWorked, secondContract);
       var firstAmount =
           firstInvoiceForm.amount() != null ? firstInvoiceForm.amount() : BigDecimal.ZERO;
       var secondAmount =
@@ -281,10 +310,15 @@ public class InvoiceService {
           bankAccount);
     }
 
-    var totalDaysWorked =
-        sumDayPercentage(workerMissionExecutions, firstCurrentMonthDay, lastCurrentMonthDay);
     var contract = hasContract ? workerContracts.getFirst() : null;
-    var tempResult = generateInvoiceFormFrom(totalDaysWorked, contract);
+    var totalDaysWorked =
+        sumDayPercentage(
+            workerMissionExecutions,
+            firstCurrentMonthDay,
+            contract == null ? lastCurrentMonthDay : contract.capToEnd(lastCurrentMonthDay));
+    var tempResult =
+        generateInvoiceFormFrom(
+            totalDaysWorked, contract, firstCurrentMonthDay, lastCurrentMonthDay);
     return new InvoiceForm(
         invoiceForm.id(),
         yearMonth,
